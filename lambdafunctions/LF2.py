@@ -14,6 +14,7 @@ def lambda_handler(event, context):
     sqs = boto3.client('sqs')
     messages = readSQS(sqs, queue_url)
 
+   # messages = {"Body": "{\"Cuisine\":\"chinese\",\"email\":\"sw6195@nyu.edu\"}"}
     for m in messages:
         body = json.loads(m['Body'])
 
@@ -56,48 +57,24 @@ def worker(body):
     email = body["email"]
 
     businessID = GetBusinessIDFromES(cuisine)
-    if businessID == '':
+    if len(businessID) == 0:
         return False
     
     db = boto3.resource('dynamodb')
     table = db.Table("yelp-restaurants")
-    resp = table.query(KeyConditionExpression=Key("BusinessID").eq(businessID))
 
-    if len(resp["Items"]) == 0: 
+    candidates = []
+    for i, id in enumerate(businessID):
+        resp = table.query(KeyConditionExpression=Key("BusinessID").eq(id))
+        if len(resp["Items"]) != 0: 
+            candidates.append(resp["Items"][0])
+
+
+    if len(candidates) == 0: 
         return False
     
-    SendEmail(email, resp["Items"][0])
+    SendEmail(email, candidates)
     return True
-
-
-def ReceiveSQS():
-    sqs = boto3.client('sqs')
-
-    queue_url = 'https://sqs.us-east-1.amazonaws.com/424508226690/chatbot.fifo'
-
-    # Receive message from SQS queue
-    response = sqs.receive_message(
-        QueueUrl=queue_url,
-        AttributeNames=[
-            'SentTimestamp'
-        ],
-        MaxNumberOfMessages=1,
-        MessageAttributeNames=[
-            'All'
-        ],
-        VisibilityTimeout=0,
-        WaitTimeSeconds=0
-    )
-
-    message = response['Messages'][0]
-    receipt_handle = message['ReceiptHandle']
-
-    # Delete received message from queue
-    sqs.delete_message(
-        QueueUrl=queue_url,
-        ReceiptHandle=receipt_handle
-    )
-    print('Received and deleted message: %s' % message)
 
 def GetBusinessIDFromES(cuisine):
     query = {
@@ -117,18 +94,25 @@ def GetBusinessIDFromES(cuisine):
     resp = requests.get(url, auth=esaccount, json=query)    
     data = json.loads(resp.content.decode())
 
+    bid = []
     if data['hits']['hits']:
-        return data['hits']['hits'][0]['_source']['BusinessID']
-    else:
-        return ''
+        resNum = len(data['hits']['hits'])
+        if resNum > 3:
+            resNum = 3
+        for i in range(resNum):
+            bid.append(data['hits']['hits'][i]['_source']['BusinessID'])
+    return bid
 
 
 
-def SendEmail(email, restaurant):
+def SendEmail(email, restaurants):
     sesClient = boto3.client('ses')
     
-    message = "<p>Hello!</p><p>Successfully reserve seats in the restaurant <b>{resNmae}</b>.<p> \
-    <p>Location: {addr}</p><p>Rating: {rating}<p>".format(resNmae = restaurant['Name'], addr = restaurant['Address'], rating = restaurant['Rating'])
+    message = "<p>Hello!</p><p>Successfully recommand restaurant.</p>"
+    
+    for res in restaurants:
+        message = message + "<p><b>{resNmae}</b>, Location: {addr}, Rating: {rating}</p> " \
+            .format(resNmae = res['Name'], addr = res['Address'], rating = res['Rating'])
     
     send_args = {
         "Source": "siqiwan1997@gmail.com",
